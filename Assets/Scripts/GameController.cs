@@ -1,16 +1,49 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Threading;
+using System.Linq;
 using UnityEngine;
+using UniRx;
 
-public enum DonutType
+public enum Flavor
 {
-    Empty,
     Vanilla,
     Chocolate,
     Banana,
     Berlin,
     Green
+}
+
+public struct DonutGameData
+{
+    public Flavor flavor;
+    public bool active;
+}
+
+public struct DonutDrawData
+{
+    public Vector3 position;
+    public Vector3 scale; // Temp
+    public Color color; // Temp
+}
+
+public struct Donut
+{
+    public DonutGameData gameData;
+    public DonutDrawData drawData;
+}
+
+public struct SwapOperation
+{
+    public int sourceIdx;
+    public int targetIdx;
+}
+
+public struct ColumnFillOperation
+{
+    public SwapOperation[] swaps;
+    public int emptyCount;
 }
 
 public class GameController : MonoBehaviour
@@ -23,10 +56,9 @@ public class GameController : MonoBehaviour
     public Mesh mesh;
     public Material material;
 
-    int sourceCell = -1;
-    int targetCell = -1;
+    Donut[] items;
 
-    DonutType[] items;
+    Queue<IEnumerator> animQueue = new Queue<IEnumerator>();
 
     Vector3 CellIndexToWorldPos(int index)
     {
@@ -77,197 +109,350 @@ public class GameController : MonoBehaviour
     }
 
     void DrawCell(int index) {
-        Vector3 cellPos = CellIndexToWorldPos(index);
-
-        Color color = new Color();
-        switch(items[index])
-        {
-            case DonutType.Empty:
-            return;
-            case DonutType.Vanilla:
-            color = Color.white;
-            break;
-            case DonutType.Chocolate:
-            color = Color.gray;
-            break;
-            case DonutType.Banana:
-            color = Color.yellow;
-            break;
-            case DonutType.Berlin:
-            color = Color.red;
-            break;
-            case DonutType.Green:
-            color = Color.green;
-            break;
-            default:
-            break;
-        }
+        DonutDrawData donut = items[index].drawData;
 
         MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-        propertyBlock.SetColor("_BaseColor", color);
+        propertyBlock.SetColor("_BaseColor", donut.color);
 
-        Graphics.DrawMesh(mesh, cellPos, Quaternion.identity, material, 0, null, 0, propertyBlock);
+        Matrix4x4 trs = Matrix4x4.TRS(donut.position, Quaternion.identity, donut.scale);
+
+        Graphics.DrawMesh(mesh, trs, material, 0, null, 0, propertyBlock);
     }
 
-    void ClearRow(int startInd, int stride, int length, ref List<int> clearList)
+    void FindClearableLines(int startInd, int stride, int length, ref List<int[]> lines)
     {
         int ind = startInd;
         int count = 0;
 
         List<int> streak = new List<int>();
-        DonutType streakType = DonutType.Empty;
+        Flavor streakType = Flavor.Vanilla;
 
         for (; count < length; count++, ind += stride)
         {
+            DonutGameData donut = items[ind].gameData;
+
             // If streak broken
-            if (streakType != items[ind] && streakType != DonutType.Empty)
+            if (streak.Count > 0 && (streakType != donut.flavor || !donut.active))
             {
                 if (streak.Count >= 3)
                 {
-                    clearList.AddRange(streak);
+                    lines.Add(streak.ToArray());
                 }
                 streak.Clear();
             }
-            
-            streakType = items[ind];
-            if (streakType != DonutType.Empty)
+
+            if (donut.active)
             {
+                streakType = donut.flavor;
                 streak.Add(ind);
             }
         }
 
         if (streak.Count >= 3)
         {
-            clearList.AddRange(streak);
+            lines.Add(streak.ToArray());
         }
     }
 
-    // Returns true if clearing happened
-    bool ClearRows()
+    void PopulateClearList(out List<int[]> outLines)
     {
-        List<int> clearList = new List<int>();
+        outLines = new List<int[]>();
+        
         for (int x = 0; x < gridWidth; x++)
         {
-            ClearRow(x, gridWidth, gridHeight, ref clearList);
+            FindClearableLines(x, gridWidth, gridHeight, ref outLines);
         }
 
         for (int y = 0; y < gridHeight; y++)
         {
-            ClearRow(y*gridWidth, 1, gridWidth, ref clearList);
+            FindClearableLines(y*gridWidth, 1, gridWidth, ref outLines);
         }
-
-        foreach (int clearIndex in clearList)
-        {
-            items[clearIndex] = DonutType.Empty;
-        }
-
-        return clearList.Count > 0;
     }
 
-    // Returns whether this should be called again afterwards
-    bool ApplyGravityToColumn(int x)
+    void ClearLines(ref List<int[]> lines)
     {
-        bool keepGoing = false;
-        for (int y = 1; y < gridHeight; y++)
+        foreach (var line in lines)
         {
-            int index = x + gridWidth*y;
+            // TODO: Add points
+            foreach(int index in line) {
+                items[index].gameData.active = false;
+            }
+        }
+    }
 
-            if (items[index] == DonutType.Empty)
+    void ShiftDown(out SwapOperation[][] outSwaps) {
+        List<SwapOperation[]> columnSwaps = new List<SwapOperation[]>();
+
+        for (int x = 0; x < gridWidth; x++)
+        {
+            ShiftDownColumn(x, out var swaps);
+            columnSwaps.Add(swaps.ToArray());
+        }
+
+        outSwaps = columnSwaps.ToArray();
+    }
+
+    void ShiftDownColumn(int x, out List<SwapOperation> outSwaps)
+    {
+        outSwaps = new List<SwapOperation>();
+
+        int emptyCount = 0;
+        for (int y = 0; y < gridHeight; y++)
+        {
+            int sourceIdx = x + gridWidth*y;
+            Donut donut = items[sourceIdx];
+
+            if (!donut.gameData.active)
             {
+                emptyCount++;
                 continue;
             }
 
-            int belowIndex = index - gridWidth;
-            if (items[belowIndex] == DonutType.Empty)
-            {
-                items[belowIndex] = items[index];
-                items[index] = DonutType.Empty;
+            int targetIdx = sourceIdx - gridWidth*emptyCount;
+            Swap(sourceIdx, targetIdx);
+            outSwaps.Add(new SwapOperation { sourceIdx = sourceIdx, targetIdx = targetIdx });
+        }
+    }
 
-                keepGoing = true;
+    void FillEmptySpaces(out Dictionary<int, DonutGameData> outData) 
+    {
+        outData = new Dictionary<int, DonutGameData>();
+
+        for (int i = 0; i < gridWidth*gridHeight; i++)
+        {
+            if (items[i].gameData.active) continue;
+
+            int index = UnityEngine.Random.Range(0, 5);
+            items[i].gameData = new DonutGameData {
+                flavor = (Flavor)index,
+                active = true
+            };
+
+            outData.Add(i, items[i].gameData);
+        }
+    }
+
+    static Color FlavorToColor(Flavor flavor)
+    {
+        Color color = new Color();
+        switch(flavor)
+        {
+            case Flavor.Vanilla:
+            color = Color.white;
+            break;
+            case Flavor.Chocolate:
+            color = Color.gray;
+            break;
+            case Flavor.Banana:
+            color = Color.yellow;
+            break;
+            case Flavor.Berlin:
+            color = Color.red;
+            break;
+            case Flavor.Green:
+            color = Color.green;
+            break;
+            default:
+            break;
+        }
+        return color;
+    }
+
+    void InitDrawData()
+    {
+        for (int i = 0; i < gridWidth*gridHeight; i++)
+        {
+            items[i].drawData = new DonutDrawData {
+                position = CellIndexToWorldPos(i),
+                scale = Vector3.one,
+                color = FlavorToColor(items[i].gameData.flavor)
+            };
+        }
+    }
+
+    void SwapColors(int sourceIdx, int targetIdx)
+    {
+        Color temp = items[sourceIdx].drawData.color;
+        items[sourceIdx].drawData.color = items[targetIdx].drawData.color;
+        items[targetIdx].drawData.color = temp;
+    }
+
+    IEnumerator AnimateSwap(int sourceIdx, int targetIdx, float duration)
+    {
+        SwapColors(sourceIdx, targetIdx);
+
+        Vector3 srcPos = CellIndexToWorldPos(sourceIdx);
+        Vector3 tgtPos = CellIndexToWorldPos(targetIdx);
+
+        float elapsed = 0.0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp(elapsed / duration, 0.0f, 1.0f);
+            items[sourceIdx].drawData.position = Vector3.Lerp(tgtPos, srcPos, t);
+            items[targetIdx].drawData.position = Vector3.Lerp(srcPos, tgtPos, t);
+            yield return null;
+        }
+    }
+
+    IEnumerator AnimateClear(int[] clearList, float duration)
+    {
+        float elapsed = 0.0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp(elapsed / duration, 0.0f, 1.0f);
+            foreach(int index in clearList)
+            {
+                items[index].drawData.scale = Vector3.Lerp(Vector3.one, Vector3.zero, t);
+            }
+            yield return null;
+        }
+    }
+
+    IEnumerator AnimateFill(SwapOperation[][] swaps, Dictionary<int, DonutGameData> newData, float duration)
+    {
+        // TODO: Super ugly, clean up
+        for (int x = 0; x < gridWidth; x++)
+        {
+            var column = swaps[x];
+
+            foreach(var swap in column)
+            {
+                SwapColors(swap.sourceIdx, swap.targetIdx);
+                items[swap.targetIdx].drawData.scale = Vector3.one;
+            }
+
+            for (int y = column.Length; y < gridHeight; y++)
+            {
+                int index = x + y*gridWidth;
+                items[index].drawData.color = FlavorToColor(newData[index].flavor);
             }
         }
 
-        return keepGoing;
-    }
-
-    void ApplyGravity() {
-        for (int x = 0; x < gridWidth; x++)
+        float elapsed = 0.0f;
+        while (elapsed < duration)
         {
-            while(ApplyGravityToColumn(x)) {}
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp(elapsed / duration, 0.0f, 1.0f);
+
+            for (int x = 0; x < gridWidth; x++)
+            {
+                var column = swaps[x];
+
+                // TODO: Precompute this & positions
+                int emptyCount = gridHeight - column.Length;
+                foreach(var swap in column)
+                {
+                    Vector3 srcPos = CellIndexToWorldPos(swap.sourceIdx);
+                    Vector3 tgtPos = CellIndexToWorldPos(swap.targetIdx);
+
+                    items[swap.targetIdx].drawData.position = Vector3.Lerp(srcPos, tgtPos, t);
+                }
+
+                for (int y = column.Length; y < gridHeight; y++)
+                {
+                    int index = x + y*gridWidth;
+                    items[index].drawData.scale = Vector3.one;
+
+                    Vector3 tgtPos = CellIndexToWorldPos(index);
+                    Vector3 srcPos = tgtPos;
+                    srcPos.y += emptyCount * cellSize;
+
+                    items[index].drawData.position = Vector3.Lerp(srcPos, tgtPos, t);
+                }
+            }
+            
+            yield return null;
         }
     }
 
-    void FillEmptySpaces() {
-        for (int i = 0; i < gridWidth*gridHeight; i++)
-        {
-            if (items[i] != DonutType.Empty) continue;
-
-            int index = UnityEngine.Random.Range(1, 6);
-            items[i] = (DonutType)index;
-        }
+    int GetMouseOverCell()
+    {
+        Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
+        return WorldPosToCellIndex(mousePos);
     }
 
     // Start is called before the first frame update
     void Start()
     {
-        items = new DonutType[gridWidth*gridHeight];
-
-        FillEmptySpaces();
+        // Set up board
+        items = new Donut[gridWidth*gridHeight];
+        FillEmptySpaces(out _);
         while (Step()) {}
+        InitDrawData();
+
+        var sourceTileStream = Observable.EveryUpdate().Where(_ => Input.GetMouseButtonDown(0)).Select(_ => GetMouseOverCell());
+        var targetTileStream = Observable.EveryUpdate().Where(_ => Input.GetMouseButtonUp(0)).Select(_ => GetMouseOverCell());
+        var swapStream = Observable.Merge(sourceTileStream, targetTileStream).Buffer(2)
+        .Select(pair => new SwapOperation { sourceIdx = pair[0], targetIdx = pair[1] })
+        .Where(swap => AreNeighbors(swap.sourceIdx, swap.targetIdx))
+        .Synchronize();
+
+        swapStream.Subscribe(swap => {
+            Swap(swap.sourceIdx, swap.targetIdx);
+            animQueue.Enqueue(AnimateSwap(swap.sourceIdx, swap.targetIdx, 0.2f));
+            // If swapping has no effect, swap back
+            if (!Step(true))
+            {
+                Swap(swap.sourceIdx, swap.targetIdx);
+                animQueue.Enqueue(AnimateSwap(swap.sourceIdx, swap.targetIdx, 0.2f));
+            }
+
+            // Keep stepping until board is static
+            while (Step(true)) {}
+        });
+
+        StartCoroutine(AnimLoop());
+    }
+
+    IEnumerator AnimLoop()
+    {
+        while(true)
+        {
+            if (animQueue.TryDequeue(out var anim))
+            {
+                yield return anim;
+            }
+            else yield return null;
+        }
     }
 
     // Advances the game
     // Returns true if board was changed
-    bool Step()
+    bool Step(bool animate = false)
     {
-        if (!ClearRows()) return false;
-        ApplyGravity();
-        FillEmptySpaces();
+        PopulateClearList(out var lines);
+        if (lines.Count == 0) return false;
+
+        ClearLines(ref lines);
+        ShiftDown(out var swaps);
+        FillEmptySpaces(out var newData);
+
+        if (animate)
+        {
+            animQueue.Enqueue(AnimateClear(lines.SelectMany(x => x).Distinct().ToArray(), 0.2f));
+            animQueue.Enqueue(AnimateFill(swaps, newData, 0.2f));
+        }
+
         return true;
     }
 
-    bool TrySwap(int source, int target)
+    void Swap(int sourceIdx, int targetIdx)
     {
-        if (sourceCell == -1 || targetCell == -1) return false;
+        if (sourceIdx == -1 || targetIdx == -1) return;
 
-        DonutType temp = items[sourceCell];
-        items[sourceCell] = items[targetCell];
-        items[targetCell] = temp;
-        return true;
+        ref Donut source = ref items[sourceIdx];
+        ref Donut target = ref items[targetIdx];
+
+        DonutGameData temp = source.gameData;
+        source.gameData = target.gameData;
+        target.gameData = temp;
     }
 
     // Update is called once per frame
     void Update()
     {
-        Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
-        int mouseOverCell = WorldPosToCellIndex(mousePos);
-
-        if (Input.GetMouseButtonDown(0))
-        {
-            sourceCell = mouseOverCell;
-        }
-        else if (Input.GetMouseButtonUp(0))
-        {
-            if (TrySwap(sourceCell, targetCell)) {
-                // If swapping has no effect, swap back
-                if (!Step()) {
-                    TrySwap(sourceCell, targetCell);
-                }
-                else while(Step()) {}
-            }
-
-            sourceCell = -1;
-            targetCell = -1;
-        }
-        else if (Input.GetMouseButton(0))
-        {
-            if (AreNeighbors(sourceCell, mouseOverCell))
-            {
-                targetCell = mouseOverCell;
-            }
-            else targetCell = -1;
-        }
-
         for (int i = 0; i < gridWidth * gridHeight; i++)
         {
             DrawCell(i);

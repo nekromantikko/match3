@@ -23,9 +23,10 @@ public struct DonutGameData
 
 public struct DonutDrawData
 {
+    public Mesh mesh;
+    public Material material;
     public Vector3 position;
     public Vector3 scale; // Temp
-    public Color color; // Temp
 }
 
 public struct Donut
@@ -53,8 +54,8 @@ public class GameController : MonoBehaviour
     public float cellSize = 1.0f;
 
     // Temp
-    public Mesh mesh;
-    public Material material;
+    public Mesh[] meshes;
+    public Material[] materials;
 
     Donut[] items;
 
@@ -111,12 +112,9 @@ public class GameController : MonoBehaviour
     void DrawCell(int index) {
         DonutDrawData donut = items[index].drawData;
 
-        MaterialPropertyBlock propertyBlock = new MaterialPropertyBlock();
-        propertyBlock.SetColor("_BaseColor", donut.color);
+        Matrix4x4 trs = Matrix4x4.TRS(donut.position, Quaternion.Euler(-45,0,45), donut.scale);
 
-        Matrix4x4 trs = Matrix4x4.TRS(donut.position, Quaternion.identity, donut.scale);
-
-        Graphics.DrawMesh(mesh, trs, material, 0, null, 0, propertyBlock);
+        Graphics.DrawMesh(donut.mesh, trs, donut.material, 0);
     }
 
     void FindClearableLines(int startInd, int stride, int length, ref List<int[]> lines)
@@ -232,32 +230,6 @@ public class GameController : MonoBehaviour
         }
     }
 
-    static Color FlavorToColor(Flavor flavor)
-    {
-        Color color = new Color();
-        switch(flavor)
-        {
-            case Flavor.Vanilla:
-            color = Color.white;
-            break;
-            case Flavor.Chocolate:
-            color = Color.gray;
-            break;
-            case Flavor.Banana:
-            color = Color.yellow;
-            break;
-            case Flavor.Berlin:
-            color = Color.red;
-            break;
-            case Flavor.Green:
-            color = Color.green;
-            break;
-            default:
-            break;
-        }
-        return color;
-    }
-
     void InitDrawData()
     {
         for (int i = 0; i < gridWidth*gridHeight; i++)
@@ -265,16 +237,22 @@ public class GameController : MonoBehaviour
             items[i].drawData = new DonutDrawData {
                 position = CellIndexToWorldPos(i),
                 scale = Vector3.one,
-                color = FlavorToColor(items[i].gameData.flavor)
+                material = materials[(int)items[i].gameData.flavor],
+                mesh = meshes[(int)items[i].gameData.flavor]
             };
         }
     }
 
     void SwapColors(int sourceIdx, int targetIdx)
     {
-        Color temp = items[sourceIdx].drawData.color;
-        items[sourceIdx].drawData.color = items[targetIdx].drawData.color;
-        items[targetIdx].drawData.color = temp;
+        Material temp = items[sourceIdx].drawData.material;
+        items[sourceIdx].drawData.material = items[targetIdx].drawData.material;
+        items[targetIdx].drawData.material = temp;
+
+        // TODO: bleh
+        Mesh tempMesh = items[sourceIdx].drawData.mesh;
+        items[sourceIdx].drawData.mesh = items[targetIdx].drawData.mesh;
+        items[targetIdx].drawData.mesh = tempMesh;
     }
 
     IEnumerator AnimateSwap(int sourceIdx, int targetIdx, float duration)
@@ -326,7 +304,8 @@ public class GameController : MonoBehaviour
             for (int y = column.Length; y < gridHeight; y++)
             {
                 int index = x + y*gridWidth;
-                items[index].drawData.color = FlavorToColor(newData[index].flavor);
+                items[index].drawData.material = materials[(int)newData[index].flavor];
+                items[index].drawData.mesh = meshes[(int)newData[index].flavor];
             }
         }
 

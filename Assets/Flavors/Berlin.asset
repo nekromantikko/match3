@@ -1,0 +1,16 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0d001d81adf749a4fa9eb7fe8a7fadce, type: 3}
+  m_Name: Berlin
+  m_EditorClassIdentifier: 
+  material: {fileID: 2100000, guid: faada6a58f75db84cac523b41102ab8c, type: 2}
+  mesh: {fileID: 5138347717625186587, guid: 9cfed0f6a0a743549a3d8a234f7f520b, type: 3}

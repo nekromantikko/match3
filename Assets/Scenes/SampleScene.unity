@@ -235,18 +235,12 @@ MonoBehaviour:
   gridWidth: 9
   gridHeight: 9
   cellSize: 1
-  meshes:
-  - {fileID: 1801548422700554733, guid: d9989025f68b9984696a88da041e1c5b, type: 3}
-  - {fileID: 4341369831164141467, guid: 09213e3645534a64182121e085f98bc1, type: 3}
-  - {fileID: -7239985305221180288, guid: 1dbb11668f337514ba13e367fb876b12, type: 3}
-  - {fileID: 5138347717625186587, guid: 9cfed0f6a0a743549a3d8a234f7f520b, type: 3}
-  - {fileID: 7163139704722639416, guid: f82bbe9181d90b0499992b4d86f62f75, type: 3}
-  materials:
-  - {fileID: 2100000, guid: 3378742345467e6418ea687785acea77, type: 2}
-  - {fileID: 2100000, guid: 58bff1a48aef54443aaccd7e275087b8, type: 2}
-  - {fileID: 2100000, guid: 111dbf0f1428a9d4aa928f310c068eb7, type: 2}
-  - {fileID: 2100000, guid: faada6a58f75db84cac523b41102ab8c, type: 2}
-  - {fileID: 2100000, guid: 1e011e2f7c52d244ba3627ae9f55b852, type: 2}
+  flavors:
+  - {fileID: 11400000, guid: 252dc95f5faa4bb449e0212aaaf50672, type: 2}
+  - {fileID: 11400000, guid: 2b3d5f12694dcce4d83796b2f470aee6, type: 2}
+  - {fileID: 11400000, guid: df2130fc73b130d4ab827ef1822a4e3c, type: 2}
+  - {fileID: 11400000, guid: 9328d18f273504e4fa9123ff1dcc1f38, type: 2}
+  - {fileID: 11400000, guid: 84a1abc6d921ce6488785048b0348a70, type: 2}
 --- !u!4 &276367129
 Transform:
   m_ObjectHideFlags: 0

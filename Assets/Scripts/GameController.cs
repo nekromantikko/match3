@@ -1,30 +1,18 @@
-using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.Threading;
 using System.Linq;
 using UnityEngine;
 using UniRx;
 
-public enum Flavor
-{
-    Vanilla,
-    Chocolate,
-    Banana,
-    Berlin,
-    Green
-}
-
 public struct DonutGameData
 {
-    public Flavor flavor;
+    public int flavor;
     public bool active;
 }
 
 public struct DonutDrawData
 {
-    public Mesh mesh;
-    public Material material;
+    public DonutFlavor flavor;
     public Vector3 position;
     public Vector3 scale; // Temp
 }
@@ -53,9 +41,7 @@ public class GameController : MonoBehaviour
     public int gridHeight = 8;
     public float cellSize = 1.0f;
 
-    // Temp
-    public Mesh[] meshes;
-    public Material[] materials;
+    public DonutFlavor[] flavors;
 
     Donut[] items;
 
@@ -114,7 +100,7 @@ public class GameController : MonoBehaviour
 
         Matrix4x4 trs = Matrix4x4.TRS(donut.position, Quaternion.Euler(-45,0,45), donut.scale);
 
-        Graphics.DrawMesh(donut.mesh, trs, donut.material, 0);
+        Graphics.DrawMesh(donut.flavor.mesh, trs, donut.flavor.material, 0);
     }
 
     void FindClearableLines(int startInd, int stride, int length, ref List<int[]> lines)
@@ -123,7 +109,7 @@ public class GameController : MonoBehaviour
         int count = 0;
 
         List<int> streak = new List<int>();
-        Flavor streakType = Flavor.Vanilla;
+        int streakType = -1;
 
         for (; count < length; count++, ind += stride)
         {
@@ -220,9 +206,9 @@ public class GameController : MonoBehaviour
         {
             if (items[i].gameData.active) continue;
 
-            int index = UnityEngine.Random.Range(0, 5);
+            int index = Random.Range(0, flavors.Length);
             items[i].gameData = new DonutGameData {
-                flavor = (Flavor)index,
+                flavor = index,
                 active = true
             };
 
@@ -237,22 +223,16 @@ public class GameController : MonoBehaviour
             items[i].drawData = new DonutDrawData {
                 position = CellIndexToWorldPos(i),
                 scale = Vector3.one,
-                material = materials[(int)items[i].gameData.flavor],
-                mesh = meshes[(int)items[i].gameData.flavor]
+                flavor = flavors[items[i].gameData.flavor]
             };
         }
     }
 
     void SwapColors(int sourceIdx, int targetIdx)
     {
-        Material temp = items[sourceIdx].drawData.material;
-        items[sourceIdx].drawData.material = items[targetIdx].drawData.material;
-        items[targetIdx].drawData.material = temp;
-
-        // TODO: bleh
-        Mesh tempMesh = items[sourceIdx].drawData.mesh;
-        items[sourceIdx].drawData.mesh = items[targetIdx].drawData.mesh;
-        items[targetIdx].drawData.mesh = tempMesh;
+        DonutFlavor temp = items[sourceIdx].drawData.flavor;
+        items[sourceIdx].drawData.flavor = items[targetIdx].drawData.flavor;
+        items[targetIdx].drawData.flavor = temp;
     }
 
     IEnumerator AnimateSwap(int sourceIdx, int targetIdx, float duration)
@@ -304,8 +284,7 @@ public class GameController : MonoBehaviour
             for (int y = column.Length; y < gridHeight; y++)
             {
                 int index = x + y*gridWidth;
-                items[index].drawData.material = materials[(int)newData[index].flavor];
-                items[index].drawData.mesh = meshes[(int)newData[index].flavor];
+                items[index].drawData.flavor = flavors[newData[index].flavor];
             }
         }
 

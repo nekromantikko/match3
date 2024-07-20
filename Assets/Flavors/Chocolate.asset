@@ -1,0 +1,16 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 0d001d81adf749a4fa9eb7fe8a7fadce, type: 3}
+  m_Name: Chocolate
+  m_EditorClassIdentifier: 
+  material: {fileID: 2100000, guid: 58bff1a48aef54443aaccd7e275087b8, type: 2}
+  mesh: {fileID: 4341369831164141467, guid: 09213e3645534a64182121e085f98bc1, type: 3}

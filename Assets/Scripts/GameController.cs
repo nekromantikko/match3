@@ -4,6 +4,7 @@ using System.Linq;
 using UnityEngine;
 using UniRx;
 using UnityEditor;
+using System;
 
 public struct DonutGameData
 {
@@ -25,23 +26,36 @@ public struct Donut
     public DonutDrawData drawData;
 }
 
-public struct SwapOperation
+public struct ClearLine
 {
-    public int sourceIdx;
-    public int targetIdx;
+    public int[] indices;
 }
 
-public struct ColumnShiftOperation
+public struct ShiftResult
 {
     public int x;
     public SwapOperation[] swaps;
     public int[] createdFlavors;
 }
 
-public struct StepResult
+public interface IOperation {}
+
+public class EmptyOperation : IOperation {}
+
+public class SwapOperation : IOperation
 {
-    public ColumnShiftOperation[] shiftOps;
-    public int[] cleared;
+    public int sourceIdx;
+    public int targetIdx;
+}
+
+public class ClearOperation : IOperation
+{
+    public List<ClearLine> lines;
+}
+
+public class ShiftOperation : IOperation
+{
+    public IEnumerable<int> columns;
 }
 
 public class GameController : MonoBehaviour
@@ -110,12 +124,12 @@ public class GameController : MonoBehaviour
         Graphics.DrawMesh(donut.flavor.mesh, trs, donut.flavor.material, 0);
     }
 
-    void FindClearableLines(int startInd, int stride, int length, ref List<int[]> lines)
+    void FindClearableLines(int startInd, int stride, int length, ref List<ClearLine> lines)
     {
         int ind = startInd;
         int count = 0;
 
-        List<int> streak = new List<int>();
+        List<int> streak = new();
         int streakType = -1;
 
         for (; count < length; count++, ind += stride)
@@ -127,7 +141,9 @@ public class GameController : MonoBehaviour
             {
                 if (streak.Count >= 3)
                 {
-                    lines.Add(streak.ToArray());
+                    lines.Add(new ClearLine {
+                        indices = streak.ToArray()
+                    });
                 }
                 streak.Clear();
             }
@@ -141,13 +157,15 @@ public class GameController : MonoBehaviour
 
         if (streak.Count >= 3)
         {
-            lines.Add(streak.ToArray());
+            lines.Add(new ClearLine {
+                indices = streak.ToArray()
+            });
         }
     }
 
-    void PopulateClearList(out List<int[]> outLines)
+    void FindClearableLines(out List<ClearLine> outLines)
     {
-        outLines = new List<int[]>();
+        outLines = new List<ClearLine>();
         
         for (int x = 0; x < gridWidth; x++)
         {
@@ -160,20 +178,25 @@ public class GameController : MonoBehaviour
         }
     }
 
-    void ClearLines(List<int[]> lines)
+    void FindShiftableColumns(out IEnumerable<int> columns)
+    {
+        columns = items.Select((donut, idx) => (donut, column: idx % gridWidth)).Where(p => !p.donut.gameData.active).Select(p => p.column).Distinct();
+    }
+
+    void ClearLines(List<ClearLine> lines)
     {
         foreach (var line in lines)
         {
             // TODO: Add points
-            foreach(int index in line) {
+            foreach(int index in line.indices) {
                 items[index].gameData.active = false;
             }
         }
     }
 
-    IEnumerable<ColumnShiftOperation> ShiftDown(IEnumerable<int> columns) {
+    IEnumerable<ShiftResult> ShiftDown(IEnumerable<int> columns) {
 
-        List<ColumnShiftOperation> result = new List<ColumnShiftOperation>();
+        List<ShiftResult> result = new List<ShiftResult>();
         foreach (var column in columns)
         {
             result.Add(ShiftDownColumn(column));
@@ -182,7 +205,7 @@ public class GameController : MonoBehaviour
         return result;
     }
 
-    ColumnShiftOperation ShiftDownColumn(int x)
+    ShiftResult ShiftDownColumn(int x)
     {
         var swaps = new List<SwapOperation>();
         int emptyCount = 0;
@@ -218,7 +241,7 @@ public class GameController : MonoBehaviour
             createdFlavors.Add(flavor);
         }
 
-        return new ColumnShiftOperation {
+        return new ShiftResult {
             x = x,
             swaps = swaps.ToArray(),
             createdFlavors = createdFlavors.ToArray()
@@ -237,10 +260,19 @@ public class GameController : MonoBehaviour
                 active = true
             };
         }
-    }
 
-    void InitDrawData()
-    {
+        // Advance game until at rest
+        FindClearableLines(out var lines);
+        if (lines.Count > 0)
+        {
+            do {
+                ClearLines(lines);
+                FindShiftableColumns(out var columnsToShift);
+                ShiftDown(columnsToShift);
+                FindClearableLines(out lines);
+            } while (lines.Count > 0);
+        }
+
         for (int i = 0; i < gridWidth*gridHeight; i++)
         {
             items[i].drawData = new DonutDrawData {
@@ -257,6 +289,13 @@ public class GameController : MonoBehaviour
         DonutFlavor temp = items[swap.sourceIdx].drawData.flavor;
         items[swap.sourceIdx].drawData.flavor = items[swap.targetIdx].drawData.flavor;
         items[swap.targetIdx].drawData.flavor = temp;
+    }
+
+    void SwapScales(SwapOperation swap)
+    {
+        Vector3 temp = items[swap.sourceIdx].drawData.scale;
+        items[swap.sourceIdx].drawData.scale = items[swap.targetIdx].drawData.scale;
+        items[swap.targetIdx].drawData.scale = temp;
     }
 
     IEnumerator AnimateSwap(SwapOperation swap, float duration)
@@ -279,6 +318,16 @@ public class GameController : MonoBehaviour
 
     IEnumerator AnimateClear(int[] clearList, float duration)
     {
+        if (clearList.Any(idx => items[idx].drawData.blocked))
+        {
+            yield return null;
+        }
+
+        foreach (var idx in clearList)
+        {
+            items[idx].drawData.blocked = true;
+        }
+
         float elapsed = 0.0f;
         while (elapsed < duration)
         {
@@ -290,16 +339,43 @@ public class GameController : MonoBehaviour
             }
             yield return null;
         }
+
+        foreach (var idx in clearList)
+        {
+            items[idx].drawData.blocked = false;
+        }
     }
 
-    IEnumerator AnimateShift(ColumnShiftOperation[] shiftOps, float duration)
+    IEnumerator AnimateShift(IEnumerable<ShiftResult> shiftRes, float duration)
     {
-        foreach(var column in shiftOps)
+        var affectedCells = shiftRes.SelectMany(s => {
+            int affectedCount = s.createdFlavors.Length + s.swaps.Length;
+            int start = gridHeight - affectedCount;
+            List<int> affected = new List<int>();
+            for (int y = start; y < gridHeight; y++)
+            {
+                int index = s.x + y*gridWidth;
+                affected.Add(index);
+            }
+            return affected;
+        }).Distinct();
+
+        while (affectedCells.Any(idx => items[idx].drawData.blocked))
+        {
+            yield return null;
+        }
+
+        foreach (var idx in affectedCells)
+        {
+            items[idx].drawData.blocked = true;
+        }
+        
+        foreach(var column in shiftRes)
         {
             foreach (var swap in column.swaps)
             {
                 SwapColors(swap);
-                items[swap.targetIdx].drawData.scale = Vector3.one;
+                SwapScales(swap);
             }
 
             int createdCount = column.createdFlavors.Length;
@@ -317,7 +393,7 @@ public class GameController : MonoBehaviour
             elapsed += Time.deltaTime;
             float t = Mathf.Clamp(elapsed / duration, 0.0f, 1.0f);
 
-            foreach(var column in shiftOps)
+            foreach(var column in shiftRes)
             {
                 foreach(var swap in column.swaps)
                 {
@@ -344,43 +420,6 @@ public class GameController : MonoBehaviour
             
             yield return null;
         }
-    }
-
-    IEnumerator AnimateStepResult(StepResult stepResult)
-    {
-        yield return AnimateClear(stepResult.cleared, 0.2f);
-        yield return AnimateShift(stepResult.shiftOps, 0.2f);
-    }
-
-    IEnumerator AnimateLegalMove(SwapOperation swap, StepResult[] steps)
-    {
-        var affectedCells = steps.SelectMany(step => step.shiftOps.SelectMany(s => {
-            int affectedCount = s.createdFlavors.Length + s.swaps.Length;
-            int start = gridHeight - affectedCount;
-            List<int> affected = new List<int>();
-            for (int y = start; y < gridHeight; y++)
-            {
-                int index = s.x + y*gridWidth;
-                affected.Add(index);
-            }
-            return affected;
-        })).Distinct();
-
-        while (affectedCells.Any(idx => items[idx].drawData.blocked))
-        {
-            yield return null;
-        }
-
-        foreach (var idx in affectedCells)
-        {
-            items[idx].drawData.blocked = true;
-        }
-
-        yield return AnimateSwap(swap, 0.2f);
-        foreach (var step in steps)
-        {
-            yield return AnimateStepResult(step);
-        }
 
         foreach (var idx in affectedCells)
         {
@@ -388,7 +427,7 @@ public class GameController : MonoBehaviour
         }
     }
 
-    IEnumerator AnimateIllegalMove(SwapOperation swap)
+    IEnumerator AnimateLegalMove(SwapOperation swap, float duration)
     {
         while (items[swap.sourceIdx].drawData.blocked || items[swap.targetIdx].drawData.blocked)
         {
@@ -398,8 +437,24 @@ public class GameController : MonoBehaviour
         items[swap.sourceIdx].drawData.blocked = true;
         items[swap.targetIdx].drawData.blocked = true;
 
-        yield return AnimateSwap(swap, 0.2f);
-        yield return AnimateSwap(swap, 0.2f);
+        yield return AnimateSwap(swap, duration);
+
+        items[swap.sourceIdx].drawData.blocked = false;
+        items[swap.targetIdx].drawData.blocked = false;
+    }
+
+    IEnumerator AnimateIllegalMove(SwapOperation swap, float duration)
+    {
+        while (items[swap.sourceIdx].drawData.blocked || items[swap.targetIdx].drawData.blocked)
+        {
+            yield return null;
+        }
+
+        items[swap.sourceIdx].drawData.blocked = true;
+        items[swap.targetIdx].drawData.blocked = true;
+
+        yield return AnimateSwap(swap, duration);
+        yield return AnimateSwap(swap, duration);
 
         items[swap.sourceIdx].drawData.blocked = false;
         items[swap.targetIdx].drawData.blocked = false;
@@ -417,54 +472,63 @@ public class GameController : MonoBehaviour
         // Set up board
         items = new Donut[gridWidth*gridHeight];
         InitializeBoard();
-        while (Step(out _)) {}
-        InitDrawData();
 
         var sourceTileStream = Observable.EveryUpdate().Where(_ => Input.GetMouseButtonDown(0)).Select(_ => GetMouseOverCell());
         var targetTileStream = Observable.EveryUpdate().Where(_ => Input.GetMouseButtonUp(0)).Select(_ => GetMouseOverCell());
         var swapStream = Observable.Merge(sourceTileStream, targetTileStream).Buffer(2)
-        .Select(pair => new SwapOperation { sourceIdx = pair[0], targetIdx = pair[1] })
-        .Where(swap => AreNeighbors(swap.sourceIdx, swap.targetIdx))
-        .SelectMany(swap => {
-            Swap(swap);
+        .Where(pair => AreNeighbors(pair[0], pair[1]) && items[pair[0]].gameData.active && items[pair[1]].gameData.active)
+        .Select(pair => new SwapOperation { sourceIdx = pair[0], targetIdx = pair[1] } as IOperation);
 
-            // Illegal move, so swap back
-            if (!Step(out var stepResult))
+        float stepRate = 0.2f;
+        var stepStream = Observable.EveryUpdate().Sample(TimeSpan.FromSeconds(stepRate)).Select(_ => {
+            FindShiftableColumns(out var columnsToShift);
+            if (columnsToShift.Count() > 0)
             {
-                Swap(swap);
-                return Observable.FromCoroutine(() => AnimateIllegalMove(swap));
+                return new ShiftOperation {
+                    columns = columnsToShift
+                };
             }
 
-            List<StepResult> steps = new List<StepResult>();
-            do {
-                steps.Add(stepResult);
-            } while (Step(out stepResult));
+            FindClearableLines(out var lines);
+            if (lines.Count != 0)
+            {
+                return new ClearOperation {
+                    lines = lines
+                } as IOperation;
+            }
 
-            return Observable.FromCoroutine(() => AnimateLegalMove(swap, steps.ToArray()));
+            return new EmptyOperation();
+        });
+
+        var animStream = Observable.Merge(swapStream, stepStream).
+        Where(operation => operation is not EmptyOperation)
+        .SelectMany(operation => {
+            if (operation is SwapOperation swap)
+            {
+                Swap(swap);
+                FindClearableLines(out var lines);
+                var legalMove = lines.Any(line => line.indices.Contains(swap.sourceIdx) || line.indices.Contains(swap.targetIdx));
+                // Illegal move, so swap back
+                if (!legalMove)
+                {
+                    Swap(swap);
+                    return Observable.FromCoroutine(() => AnimateIllegalMove(swap, 0.2f));
+                }
+
+                return Observable.FromCoroutine(() => AnimateLegalMove(swap, 0.2f));
+            }
+            else if (operation is ClearOperation clear)
+            {
+                ClearLines(clear.lines);
+                var clearList = clear.lines.SelectMany(line => line.indices).Distinct();
+                return Observable.FromCoroutine(() => AnimateClear(clearList.ToArray(), 0.2f));
+            }
+
+            var shift = operation as ShiftOperation;
+            var shiftRes = ShiftDown(shift.columns);
+            return Observable.FromCoroutine(() => AnimateShift(shiftRes, 0.2f));
         })
         .Subscribe();
-    }
-
-    // Advances the game
-    // Returns whether anything happened (If not, move was not valid)
-    bool Step(out StepResult outResult)
-    {
-        outResult = new StepResult();
-        PopulateClearList(out var lines);
-        if (lines.Count == 0) return false;
-
-        ClearLines(lines);
-
-        var clearList = lines.SelectMany(idx => idx).Distinct();
-
-        var affectedColumns = clearList.Select(idx => idx % gridWidth).Distinct();
-        
-        var shiftOps = ShiftDown(affectedColumns);
-
-        outResult.cleared = clearList.ToArray();
-        outResult.shiftOps = shiftOps.ToArray();
-
-        return true;
     }
 
     void Swap(SwapOperation swap)

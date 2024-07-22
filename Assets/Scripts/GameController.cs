@@ -5,6 +5,7 @@ using UnityEngine;
 using UniRx;
 using UnityEditor;
 using System;
+using TMPro;
 
 public struct DonutGameData
 {
@@ -65,7 +66,11 @@ public class GameController : MonoBehaviour
 
     public DonutFlavor[] flavors;
 
+    public TMP_Text scoreText;
+
     Donut[] items;
+    IntReactiveProperty score = new(0);
+    int drawScore = 0;
 
     Vector3 CellIndexToWorldPos(int index)
     {
@@ -186,7 +191,6 @@ public class GameController : MonoBehaviour
     {
         foreach (var line in lines)
         {
-            // TODO: Add points
             foreach(int index in line.indices) {
                 items[index].gameData.active = false;
             }
@@ -394,6 +398,19 @@ public class GameController : MonoBehaviour
         yield return AnimateSwap(swap, duration);
     }
 
+    IEnumerator AnimateScore(int currentScore, int newScore, float duration)
+    {
+        float elapsed = 0.0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            float t = Mathf.Clamp(elapsed / duration, 0.0f, 1.0f);
+            drawScore = (int)Mathf.Lerp(currentScore, newScore, t);
+
+            yield return null;
+        }
+    }
+
     int GetMouseOverCell()
     {
         Vector3 mousePos = Camera.main.ScreenToWorldPoint(Input.mousePosition);
@@ -454,6 +471,16 @@ public class GameController : MonoBehaviour
             else if (operation is ClearOperation clear)
             {
                 ClearLines(clear.lines);
+
+                int baseScore = 100;
+                int totalScore = 0;
+                foreach(var line in clear.lines)
+                {
+                    int multiplier = line.indices.Length - 2;
+                    totalScore += baseScore*multiplier;
+                }
+                score.Value += totalScore;
+
                 var clearList = clear.lines.SelectMany(line => line.indices).Distinct();
                 return Observable.FromCoroutine(() => AnimateClear(clearList.ToArray(), 0.2f));
             }
@@ -461,6 +488,13 @@ public class GameController : MonoBehaviour
             var shift = operation as ShiftOperation;
             var shiftRes = ShiftDown(shift.columns);
             return Observable.FromCoroutine(() => AnimateShift(shiftRes, 0.2f));
+        })
+        .Concat()
+        .Subscribe();
+
+        score.Buffer(2,1)
+        .Select(pair => {
+            return Observable.FromCoroutine(() => AnimateScore(pair[0], pair[1], 0.5f));
         })
         .Concat()
         .Subscribe();
@@ -485,5 +519,7 @@ public class GameController : MonoBehaviour
         {
             DrawCell(i);
         }
+
+        scoreText.text = drawScore.ToString();
     }
 }

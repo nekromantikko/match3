@@ -17,7 +17,6 @@ public struct DonutDrawData
     public DonutFlavor flavor;
     public Vector3 position;
     public Vector3 scale;
-    public bool blocked;
 }
 
 public struct Donut
@@ -278,8 +277,7 @@ public class GameController : MonoBehaviour
             items[i].drawData = new DonutDrawData {
                 position = CellIndexToWorldPos(i),
                 scale = Vector3.one,
-                flavor = flavors[items[i].gameData.flavor],
-                blocked = false
+                flavor = flavors[items[i].gameData.flavor]
             };
         }
     }
@@ -318,16 +316,6 @@ public class GameController : MonoBehaviour
 
     IEnumerator AnimateClear(int[] clearList, float duration)
     {
-        if (clearList.Any(idx => items[idx].drawData.blocked))
-        {
-            yield return null;
-        }
-
-        foreach (var idx in clearList)
-        {
-            items[idx].drawData.blocked = true;
-        }
-
         float elapsed = 0.0f;
         while (elapsed < duration)
         {
@@ -339,37 +327,10 @@ public class GameController : MonoBehaviour
             }
             yield return null;
         }
-
-        foreach (var idx in clearList)
-        {
-            items[idx].drawData.blocked = false;
-        }
     }
 
     IEnumerator AnimateShift(IEnumerable<ShiftResult> shiftRes, float duration)
-    {
-        var affectedCells = shiftRes.SelectMany(s => {
-            int affectedCount = s.createdFlavors.Length + s.swaps.Length;
-            int start = gridHeight - affectedCount;
-            List<int> affected = new List<int>();
-            for (int y = start; y < gridHeight; y++)
-            {
-                int index = s.x + y*gridWidth;
-                affected.Add(index);
-            }
-            return affected;
-        }).Distinct();
-
-        while (affectedCells.Any(idx => items[idx].drawData.blocked))
-        {
-            yield return null;
-        }
-
-        foreach (var idx in affectedCells)
-        {
-            items[idx].drawData.blocked = true;
-        }
-        
+    {        
         foreach(var column in shiftRes)
         {
             foreach (var swap in column.swaps)
@@ -420,44 +381,17 @@ public class GameController : MonoBehaviour
             
             yield return null;
         }
-
-        foreach (var idx in affectedCells)
-        {
-            items[idx].drawData.blocked = false;
-        }
     }
 
     IEnumerator AnimateLegalMove(SwapOperation swap, float duration)
     {
-        while (items[swap.sourceIdx].drawData.blocked || items[swap.targetIdx].drawData.blocked)
-        {
-            yield return null;
-        }
-
-        items[swap.sourceIdx].drawData.blocked = true;
-        items[swap.targetIdx].drawData.blocked = true;
-
         yield return AnimateSwap(swap, duration);
-
-        items[swap.sourceIdx].drawData.blocked = false;
-        items[swap.targetIdx].drawData.blocked = false;
     }
 
     IEnumerator AnimateIllegalMove(SwapOperation swap, float duration)
     {
-        while (items[swap.sourceIdx].drawData.blocked || items[swap.targetIdx].drawData.blocked)
-        {
-            yield return null;
-        }
-
-        items[swap.sourceIdx].drawData.blocked = true;
-        items[swap.targetIdx].drawData.blocked = true;
-
         yield return AnimateSwap(swap, duration);
         yield return AnimateSwap(swap, duration);
-
-        items[swap.sourceIdx].drawData.blocked = false;
-        items[swap.targetIdx].drawData.blocked = false;
     }
 
     int GetMouseOverCell()
@@ -502,7 +436,7 @@ public class GameController : MonoBehaviour
 
         var animStream = Observable.Merge(swapStream, stepStream).
         Where(operation => operation is not EmptyOperation)
-        .SelectMany(operation => {
+        .Select(operation => {
             if (operation is SwapOperation swap)
             {
                 Swap(swap);
@@ -528,6 +462,7 @@ public class GameController : MonoBehaviour
             var shiftRes = ShiftDown(shift.columns);
             return Observable.FromCoroutine(() => AnimateShift(shiftRes, 0.2f));
         })
+        .Concat()
         .Subscribe();
     }
 

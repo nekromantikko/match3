@@ -69,6 +69,8 @@ public class GameController : MonoBehaviour
     public TMP_Text scoreText;
 
     Donut[] items;
+    int selected = -1;
+
     IntReactiveProperty score = new(0);
     int drawScore = 0;
 
@@ -99,25 +101,30 @@ public class GameController : MonoBehaviour
         return yGrid * gridWidth + xGrid;
     }
 
-    bool AreNeighbors(int a, int b)
+    int GetCellAbove(int idx)
     {
-        if (a == -1 || b == -1) return false;
+        int above = idx + gridWidth;
+        if (above >= gridHeight*gridHeight) return -1;
+        return above;
+    }
 
-        if (a == b) return false;
+    int GetCellBelow(int idx)
+    {
+        int below = idx - gridWidth;
+        if (below < 0) return -1;
+        return below;
+    }
 
-        // If on same row
-        if (a / gridWidth == b / gridWidth)
-        {
-            return (a == b-1 || a == b+1);
-        }
+    int GetCellRight(int idx)
+    {
+        if (idx % gridWidth == gridWidth-1) return -1;
+        return idx + 1;
+    }
 
-        // Same column
-        if (a % gridWidth == b % gridWidth)
-        {
-            return (a == b-gridWidth || a == b+gridWidth);
-        }
-
-        return false;
+    int GetCellLeft(int idx)
+    {
+        if (idx % gridWidth == 0) return -1;
+        return idx - 1;
     }
 
     void DrawCell(int index) {
@@ -424,11 +431,54 @@ public class GameController : MonoBehaviour
         items = new Donut[gridWidth*gridHeight];
         InitializeBoard();
 
-        var sourceTileStream = Observable.EveryUpdate().Where(_ => Input.GetMouseButtonDown(0)).Select(_ => GetMouseOverCell());
-        var targetTileStream = Observable.EveryUpdate().Where(_ => Input.GetMouseButtonUp(0)).Select(_ => GetMouseOverCell());
-        var swapStream = Observable.Merge(sourceTileStream, targetTileStream).Buffer(2)
-        .Where(pair => AreNeighbors(pair[0], pair[1]) && items[pair[0]].gameData.active && items[pair[1]].gameData.active)
-        .Select(pair => new SwapOperation { sourceIdx = pair[0], targetIdx = pair[1] } as IOperation);
+        var mouseDownStream = Observable.EveryUpdate()
+        .Where(_ => Input.GetMouseButtonDown(0))
+        .Select(_ => GetMouseOverCell())
+        .Subscribe(idx => selected = idx);
+
+        var swapStream = Observable.EveryUpdate()
+        .Where(_ => Input.GetMouseButton(0))
+        .Select(_ => new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y")))
+        .Where(velocity => velocity.magnitude >= 0.25)
+        .Select(velocity => {
+            var result = new SwapOperation {
+                sourceIdx = -1,
+                targetIdx = -1
+            };
+
+            if (selected < 0) return result;
+
+            result.sourceIdx = selected;
+            selected = -1;
+
+            Vector3 dir = Vector3.Normalize(velocity);
+
+            float DoR = Vector3.Dot(dir, Vector3.right);
+            if (Mathf.Abs(DoR) > 0.80) 
+            {
+                if (Mathf.Sign(DoR) > 0)
+                {
+                    result.targetIdx = GetCellLeft(result.sourceIdx);
+                } else result.targetIdx = GetCellRight(result.sourceIdx);
+                return result;
+            }
+
+            float DoU = Vector3.Dot(dir, Vector3.up);
+            if (Mathf.Abs(DoU) > 0.80)
+            {
+                if (Mathf.Sign(DoU) > 0)
+                {
+                    result.targetIdx = GetCellAbove(result.sourceIdx);
+                } else result.targetIdx = GetCellBelow(result.sourceIdx);
+                return result;
+            }
+
+            return result;
+        })
+        .Where(swap => swap.sourceIdx >= 0 
+            && swap.targetIdx >= 0 
+            && items[swap.sourceIdx].gameData.active 
+            && items[swap.targetIdx].gameData.active);
 
         float stepRate = 0.2f;
         var stepStream = Observable.EveryUpdate().Sample(TimeSpan.FromSeconds(stepRate)).Select(_ => {
